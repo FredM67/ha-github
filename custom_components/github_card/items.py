@@ -1,8 +1,10 @@
-"""Open issues and pull requests of the followed repositories, for the panel's Issues and Pull requests tabs.
+"""Open issues and pull requests of the followed repositories, for the panel's Issues and Pull requests tabs, and
+the open pull requests of the token's user in any repository, for its My pull requests tab.
 
 The GitHub integration only exposes counts and the latest issue / pull request of a repository. The full lists
 come from the GitHub GraphQL API, with the access token of the GitHub integration (no token of our own): one
-query for 20 repositories at a time, kept for a few minutes.
+query for 20 repositories at a time, kept for a few minutes. The user's own pull requests come from a search
+added to the first of these queries (alias ``mine``), so they cost no request of their own.
 """
 
 from __future__ import annotations
@@ -40,6 +42,9 @@ GRAPHQL_URL = "https://api.github.com/graphql"
 CACHE_SECONDS = 300
 CHUNK = 20
 PER_REPO = 50
+MINE_LIMIT = 50
+# The open pull requests of the token's user, in any repository (archived ones left out), most recently updated first
+MINE_SEARCH = "is:pr is:open author:@me archived:false sort:updated-desc"
 _NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 _FIELDS = (
@@ -49,8 +54,9 @@ _FIELDS = (
 _ORDER = f"states: OPEN, first: {PER_REPO}, orderBy: {{field: UPDATED_AT, direction: DESC}}"
 
 
-def build_query(repos: list[str]) -> str:
-    """One GraphQL query for these repositories (validated owner/name, quoted with JSON)."""
+def build_query(repos: list[str], mine: bool = False) -> str:
+    """One GraphQL query for these repositories (validated owner/name, quoted with JSON); `mine` adds the search
+    for the user's own open pull requests."""
     parts = []
     for i, repo in enumerate(repos):
         owner, name = repo.split("/", 1)
@@ -58,6 +64,11 @@ def build_query(repos: list[str]) -> str:
             f"r{i}: repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{ nameWithOwner "
             f"issues({_ORDER}) {{ totalCount nodes {{ {_FIELDS} }} }} "
             f"pullRequests({_ORDER}) {{ totalCount nodes {{ {_FIELDS} isDraft reviewDecision }} }} }}"
+        )
+    if mine:
+        parts.append(
+            f"mine: search(query: {json.dumps(MINE_SEARCH)}, type: ISSUE, first: {MINE_LIMIT}) {{ issueCount "
+            f"nodes {{ ... on PullRequest {{ {_FIELDS} isDraft reviewDecision repository {{ nameWithOwner }} }} }} }}"
         )
     return "query { " + " ".join(parts) + " }"
 
@@ -93,9 +104,9 @@ def parse(
     """Issues and pull requests of a GraphQL answer, and the open totals per repository."""
     seen = set() if seen is None else seen
     issues, pulls, totals = [], [], {}
-    for repo_data in (data or {}).values():
-        if not repo_data:
-            continue  # a repository that no longer exists or is not readable: its alias is null
+    for alias, repo_data in (data or {}).items():
+        if not repo_data or alias == "mine":
+            continue  # a repository that no longer exists or is not readable: its alias is null; mine: parse_mine
         repo = repo_data["nameWithOwner"]
         # A repository followed under two names (its former name redirects to the new one) comes back twice:
         # counted once. `seen` carries the repositories already read from the previous queries.
@@ -108,11 +119,25 @@ def parse(
     return sorted(issues, key=_newest, reverse=True), sorted(pulls, key=_newest, reverse=True), totals
 
 
+def parse_mine(data: dict[str, Any]) -> tuple[list[dict], int]:
+    """The user's own open pull requests of a GraphQL answer (most recently updated first) and their total."""
+    search = (data or {}).get("mine") or {}
+    mine = [
+        _item(node["repository"]["nameWithOwner"], node, True)
+        for node in search.get("nodes") or []
+        if node and (node.get("repository") or {}).get("nameWithOwner")
+    ]
+    return sorted(mine, key=_newest, reverse=True), search.get("issueCount") or 0
+
+
 @dataclass
 class Items:
     issues: list[dict] = field(default_factory=list)
     pulls: list[dict] = field(default_factory=list)
     totals: dict[str, dict[str, int]] = field(default_factory=dict)
+    # The user's own open pull requests, in any repository (the first MINE_LIMIT), and how many are open in all
+    mine: list[dict] = field(default_factory=list)
+    mine_total: int = 0
     fetched_at: float | None = None
     error: str | None = None
 
@@ -121,6 +146,8 @@ class Items:
             "issues": self.issues,
             "pulls": self.pulls,
             "totals": self.totals,
+            "mine": self.mine,
+            "mine_total": self.mine_total,
             "fetched_at": self.fetched_at,
             "error": self.error,
             # Never fetched yet (the first background poll has not landed): the panel keeps showing "loading"
@@ -129,13 +156,12 @@ class Items:
 
 
 async def async_items(hass: HomeAssistant, refresh: bool = False) -> Items:
-    """Open issues and pull requests of the followed repositories, from the cache unless stale or `refresh`."""
+    """Open issues and pull requests of the followed repositories and the user's own open pull requests, from the
+    cache unless stale or `refresh`. The user's pull requests are fetched even with no repository followed."""
     entry = github_entry(hass)
     if entry is None:
         return Items(error="github_not_configured")
     repos = sorted((r for r in followed(entry) if _NAME.match(r)), key=str.casefold)
-    if not repos:
-        return Items()
     cache = hass.data.setdefault(DOMAIN, {})
     cached = cache.get("items")
     now = time.time()
@@ -146,12 +172,17 @@ async def async_items(hass: HomeAssistant, refresh: bool = False) -> Items:
         return Items(error="no_token")
     session = async_get_clientsession(hass)
     issues, pulls, totals = [], [], {}
+    mine: list[dict] = []
+    mine_total = 0
     seen: set[str] = set()
+    # 20 repositories per query; the first query also searches the user's own pull requests (alone, without any
+    # repository followed)
+    chunks = [repos[s : s + CHUNK] for s in range(0, len(repos), CHUNK)] or [[]]
 
-    async def _query(names: list[str]) -> dict[str, Any] | str:
+    async def _query(query: str) -> dict[str, Any] | str:
         async with session.post(
             GRAPHQL_URL,
-            json={"query": build_query(names)},
+            json={"query": query},
             headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
             timeout=aiohttp.ClientTimeout(total=30),
         ) as resp:
@@ -162,17 +193,27 @@ async def async_items(hass: HomeAssistant, refresh: bool = False) -> Items:
 
     # The queries of 20 repositories each run side by side (they waited for one another), parsed in order
     try:
-        bodies = await asyncio.gather(*(_query(repos[s : s + CHUNK]) for s in range(0, len(repos), CHUNK)))
-        for body in bodies:
+        bodies = await asyncio.gather(*(_query(build_query(names, mine=i == 0)) for i, names in enumerate(chunks)))
+        for i, body in enumerate(bodies):
             if isinstance(body, str):
                 return Items(error=body)
-            i, p, t = parse(body.get("data") or {}, seen)
-            issues += i
-            pulls += p
-            totals.update(t)
+            data = body.get("data") or {}
+            if i == 0:
+                mine, mine_total = parse_mine(data)
+            found_issues, found_pulls, found_totals = parse(data, seen)
+            issues += found_issues
+            pulls += found_pulls
+            totals.update(found_totals)
     except (aiohttp.ClientError, TimeoutError, ValueError, KeyError) as err:
         return Items(error=type(err).__name__)
-    items = Items(sorted(issues, key=_newest, reverse=True), sorted(pulls, key=_newest, reverse=True), totals, now)
+    items = Items(
+        sorted(issues, key=_newest, reverse=True),
+        sorted(pulls, key=_newest, reverse=True),
+        totals,
+        mine,
+        mine_total,
+        now,
+    )
     cache["items"] = (repos, items)
     return items
 

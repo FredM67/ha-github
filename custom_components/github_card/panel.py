@@ -1,14 +1,16 @@
 """Sidebar panel (administrators only) and its WebSocket commands.
 
-The panel (``frontend/github-panel.js``) has four tabs: Repositories (follow / stop following the
+The panel (``frontend/github-panel.js``) has five tabs: Repositories (follow / stop following the
 repositories of your GitHub account in the GitHub integration, their counters and the GitHub Card's details),
-Issues and Pull requests (open ones of the followed repositories) and Settings. Commands:
+Issues and Pull requests (open ones of the followed repositories), My pull requests (the open pull requests of
+the GitHub account, in any repository) and Settings. Commands:
 
 - ``github_card/repositories``: the GitHub integration's state, the followed repositories and the ones
   it offers that pass the settings;
 - ``github_card/follow``: follows and unfollows repositories, with a single reload of the GitHub entry;
-- ``github_card/items``: the open issues and pull requests of the followed repositories (GitHub GraphQL API,
-  with the GitHub integration's token, cached for 5 minutes; ``refresh`` asks GitHub again);
+- ``github_card/items``: the open issues and pull requests of the followed repositories, and the user's own
+  open pull requests in any repository (GitHub GraphQL API, with the GitHub integration's token, cached for
+  5 minutes; ``refresh`` asks GitHub again);
 - ``github_card/settings`` / ``github_card/update_settings``: the settings (options of the entry).
 """
 

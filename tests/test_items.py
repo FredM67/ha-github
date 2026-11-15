@@ -8,7 +8,7 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.github_card.const import DOMAIN
-from custom_components.github_card.items import GRAPHQL_URL, async_items, build_query, parse
+from custom_components.github_card.items import GRAPHQL_URL, async_items, build_query, parse, parse_mine
 
 from .test_init import _setup, _ws
 
@@ -31,6 +31,25 @@ NODE = {
 }
 
 
+MINE = {
+    **NODE,
+    "number": 12,
+    "title": "Fix the door sensor",
+    "url": "https://github.com/octo-org/octo-repo/pull/12",
+    "updatedAt": "2026-11-10T09:00:00Z",
+    "author": {"login": "juju35"},
+    "isDraft": True,
+    "reviewDecision": None,
+    "repository": {"nameWithOwner": "octo-org/octo-repo"},
+}
+
+
+def _mine():
+    """The search for the user's own open pull requests, as answered under the `mine` alias."""
+    older = {**MINE, "number": 3, "updatedAt": "2026-10-01T09:00:00Z", "isDraft": False, "reviewDecision": "APPROVED"}
+    return {"issueCount": 57, "nodes": [older, MINE, {}]}
+
+
 def _answer():
     issue = {
         **NODE,
@@ -47,6 +66,7 @@ def _answer():
                 "pullRequests": {"totalCount": 1, "nodes": [{**NODE, "isDraft": False, "reviewDecision": "APPROVED"}]},
             },
             "r1": None,
+            "mine": _mine(),
         }
     }
 
@@ -71,6 +91,25 @@ def test_query_quotes_names():
     assert 'r0: repository(owner: "juju35", name: "ha-parcel")' in query
     assert 'name: "b\\"c"' in query
     assert "states: OPEN" in query and "isDraft reviewDecision" in query
+    assert "search(" not in query
+
+
+def test_query_searches_my_pull_requests():
+    """The first query also searches the user's own open pull requests, in any repository."""
+    query = build_query(["juju35/ha-parcel"], mine=True)
+    assert 'mine: search(query: "is:pr is:open author:@me archived:false sort:updated-desc", type: ISSUE' in query
+    assert "repository { nameWithOwner }" in query
+    # Alone, without any repository followed
+    assert build_query([], mine=True).startswith("query { mine: search(")
+
+
+def test_parse_mine_sorts_newest_first_and_keeps_the_total():
+    mine, total = parse_mine(_answer()["data"])
+    assert [p["number"] for p in mine] == [12, 3]  # the empty node (not a pull request) is skipped
+    assert mine[0]["repo"] == "octo-org/octo-repo" and mine[0]["draft"] is True and mine[0]["review"] is None
+    assert mine[1]["review"] == "APPROVED"
+    assert total == 57
+    assert parse_mine({}) == ([], 0)
 
 
 def test_parse_sorts_newest_first_and_skips_missing():
@@ -78,15 +117,16 @@ def test_parse_sorts_newest_first_and_skips_missing():
     assert [i["number"] for i in issues] == [94]
     assert pulls[0]["review"] == "APPROVED" and pulls[0]["draft"] is False
     assert pulls[0]["labels"] == [{"name": "i18n", "color": "0e8a16"}]
-    assert totals == {"juju35/ha-parcel": {"issues": 3, "pulls": 1}}
+    assert totals == {"juju35/ha-parcel": {"issues": 3, "pulls": 1}}  # the mine alias is not a repository
 
 
 async def test_items_cached_then_refreshed(hass, aioclient_mock, github):
     aioclient_mock.post(GRAPHQL_URL, json=_answer())
     items = await async_items(hass)
     assert items.error is None
-    assert aioclient_mock.call_count == 1
+    assert aioclient_mock.call_count == 1  # the user's pull requests come with the repositories' query
     assert aioclient_mock.mock_calls[0][3]["Authorization"] == "Bearer tok"
+    assert [p["number"] for p in items.mine] == [12, 3] and items.mine_total == 57
     await async_items(hass)
     assert aioclient_mock.call_count == 1  # cached
     await async_items(hass, refresh=True)
@@ -98,11 +138,18 @@ async def test_items_errors(hass, aioclient_mock, github):
     assert (await async_items(hass)).error == "http_401"
 
 
-async def test_items_without_github_or_repositories(hass):
+async def test_items_without_github_or_repositories(hass, aioclient_mock):
     assert (await async_items(hass)).error == "github_not_configured"
+    assert aioclient_mock.call_count == 0
+    # No repository followed: the user's own pull requests are still searched, alone
+    aioclient_mock.post(GRAPHQL_URL, json={"data": {"mine": _mine()}})
     MockConfigEntry(domain="github", data={"access_token": "tok"}).add_to_hass(hass)
     items = await async_items(hass)
-    assert items.error is None and items.issues == [] and items.pulls == []
+    assert items.error is None and items.issues == [] and items.pulls == [] and items.totals == {}
+    assert aioclient_mock.call_count == 1
+    assert aioclient_mock.mock_calls[0][2]["query"].startswith("query { mine: search(")
+    assert [p["number"] for p in items.mine] == [12, 3] and items.mine_total == 57
+    assert items.as_dict()["pending"] is False
 
 
 async def test_items_command_reads_the_cache(hass, aioclient_mock, github, hass_ws_client):
@@ -122,6 +169,8 @@ async def test_items_command_reads_the_cache(hass, aioclient_mock, github, hass_
     assert aioclient_mock.call_count == 1
     assert msg["result"]["issues"][0]["title"] == "Logo missing"
     assert msg["result"]["pulls"][0]["url"] == "https://github.com/juju35/ha-parcel/pull/97"
+    assert msg["result"]["mine"][0]["url"] == "https://github.com/octo-org/octo-repo/pull/12"
+    assert msg["result"]["mine_total"] == 57
     assert msg["result"]["pending"] is False
     assert "tok" not in str(msg)
 

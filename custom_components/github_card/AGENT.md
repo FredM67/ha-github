@@ -16,7 +16,8 @@ custom_components/github_card/
 ├── repositories.py  # Followed repositories (github subentries "repository"), offered ones (read from the github
 │                    # integration's own subentry flow, then aborted), async_apply: one unload / setup of the github
 │                    # entry for a whole follow / unfollow change
-├── items.py         # Open issues / PRs via GitHub GraphQL with the github entry's access_token, 20 repos per query,
+├── items.py         # Open issues / PRs via GitHub GraphQL with the github entry's access_token, 20 repos per query
+│                    # (the first also searches the user's own open PRs, alias `mine`, even with no repo followed),
 │                    # cached 5 minutes in hass.data[DOMAIN]["items"]
 ├── archived.py    # Which offered repositories are archived (GraphQL, 50 per query, cached 10 minutes), for the
 │                    # ignore_archived setting

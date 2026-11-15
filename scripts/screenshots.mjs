@@ -90,6 +90,18 @@ const panelMock = {
         author: "octocat", updated: new Date(NOW - 3 * 86400e3).toISOString(), comments: 0, labels: [], draft: true, review: null },
     ],
     totals: { "home-assistant/core": { issues: 2614, pulls: 642 }, "juju35/ha-parcel": { issues: 3, pulls: 1 }, "juju35/ha-weather-card": { issues: 1, pulls: 0 } },
+    // My pull requests: in any repository, followed or not
+    mine: [
+      { repo: "home-assistant/core", number: 155412, title: "Add diagnostics to the GitHub integration", url: "https://github.com/home-assistant/core/pull/155412",
+        author: "octocat", updated: new Date(NOW - 40 * 60e3).toISOString(), comments: 3, labels: [{ name: "integration: github", color: "fbca04" }], draft: false, review: "APPROVED" },
+      { repo: "octo-org/octo-lib", number: 58, title: "Handle a missing door state", url: "https://github.com/octo-org/octo-lib/pull/58",
+        author: "octocat", updated: new Date(NOW - 6 * 3600e3).toISOString(), comments: 2, labels: [{ name: "bug", color: "d73a4a" }], draft: false, review: "CHANGES_REQUESTED" },
+      { repo: "home-assistant/home-assistant.io", number: 40211, title: "GitHub: document the diagnostics", url: "https://github.com/home-assistant/home-assistant.io/pull/40211",
+        author: "octocat", updated: new Date(NOW - 2 * 86400e3).toISOString(), comments: 0, labels: [], draft: false, review: "REVIEW_REQUIRED" },
+      { repo: "octo-org/octo-firmware", number: 7, title: "Configurable sampling rate", url: "https://github.com/octo-org/octo-firmware/pull/7",
+        author: "octocat", updated: new Date(NOW - 9 * 86400e3).toISOString(), comments: 1, labels: [], draft: true, review: null },
+    ],
+    mine_total: 4,
     fetched_at: NOW / 1000,
     error: null,
   },

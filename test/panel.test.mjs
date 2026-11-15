@@ -236,3 +236,42 @@ test("Retry loads again at once", async () => {
   assert.equal(reloads, 1);
   assert.equal(lib.GITHUB_PANEL_STRINGS.fr.retry, "Réessayer");
 });
+
+test("My pull requests: any repository (none followed), its own filter, the badge counts them all", () => {
+  const p = panel();
+  p._overview = { configured: true, state: "loaded", followed: [], offered: [] };
+  const pr = (repo, number, extra = {}) => ({ repo, number, title: `PR ${number}`, url: `https://github.com/${repo}/pull/${number}`, author: "octocat", updated: "2026-11-10T09:00:00Z", comments: 0, labels: [], draft: false, review: null, ...extra });
+  p._items = {
+    issues: [], pulls: [], totals: {},
+    mine: [pr("octo-org/octo-repo", 12, { review: "APPROVED" }), pr("home-assistant/core", 155412, { draft: true })],
+    mine_total: 57, fetched_at: 1, error: null, pending: false,
+  };
+  const hosts = {};
+  p.shadowRoot.getElementById = (id) => (hosts[id] ??= { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] });
+  p._renderItemTabs();
+  const mine = hosts.mine.innerHTML;
+  // Listed although no repository is followed (the other tabs say to follow some)
+  assert.match(mine, /PR 12/);
+  assert.match(mine, /PR 155412/);
+  assert.match(hosts.pulls.innerHTML, /Suivez des dépôts/);
+  // Pull request icon and review state, no "by {author}" on the user's own
+  assert.match(mine, /Approuvée/);
+  assert.doesNotMatch(mine, /octocat/);
+  // The total of all of them, and the note that only the most recently updated are listed
+  assert.match(mine, /Ouvertes : 57/);
+  assert.match(mine, /Les 2 mises à jour le plus récemment sont listées\./);
+  assert.equal(p._tabCount("mine"), 57);
+  assert.equal(p._tabCount("settings"), null);
+  // Its repository filter is its own
+  p._mineRepo = "octo-org/octo-repo";
+  p._renderItems("mine");
+  assert.match(hosts.mine.innerHTML, /PR 12/);
+  assert.doesNotMatch(hosts.mine.innerHTML, /PR 155412/);
+  assert.match(hosts.mine.innerHTML, /Ouvertes : 1/);
+  assert.equal(p._itemRepo, "");
+  // None open
+  p._mineRepo = "";
+  p._items = { ...p._items, mine: [], mine_total: 0 };
+  p._renderItems("mine");
+  assert.match(hosts.mine.innerHTML, /Vous n’avez aucune pull request ouverte\./);
+});
