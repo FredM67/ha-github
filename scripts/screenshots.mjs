@@ -12,6 +12,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const NOW = Date.now();
 const cardJs = readFileSync(`${root}custom_components/github_card/frontend/github-card.js`, "utf8");
 const panelJs = readFileSync(`${root}custom_components/github_card/frontend/github-panel.js`, "utf8");
+// The panel's English strings, from the integration's translations (Home Assistant's localize is mocked on the page)
+const panelStrings = JSON.parse(readFileSync(`${root}custom_components/github_card/translations/en.json`, "utf8")).selector.panel.options;
 
 const THEMES = {
   light: {
@@ -122,7 +124,7 @@ async function openCard(s) {
   await page.addScriptTag({ content: cardJs });
   if (s.panel) await page.addScriptTag({ content: panelJs });
   await page.evaluate(
-    ({ type, config, states, entities, devices, open, zoom, panel, mock, expand, select, sidebar }) => {
+    ({ type, config, states, entities, devices, open, zoom, panel, mock, expand, select, sidebar, panelStrings }) => {
       if (sidebar) {
         // A faithful mock of Home Assistant's sidebar entry with the count badge (open issues + pull requests),
         // amber here because there are open issues, like the native notifications count. No real sidebar is mounted.
@@ -161,6 +163,12 @@ async function openCard(s) {
         if (select) el._selected = new Set(select);
         el.hass = {
           states, entities, devices, language: "en", locale: { language: "en" },
+          // Home Assistant's localize for the panel's strings (selector.panel.options of the translations)
+          localize: (key, vars = {}) => {
+            let text = panelStrings[key.replace("component.github_card.selector.panel.options.", "")] ?? "";
+            for (const [name, value] of Object.entries(vars)) text = text.replace(`{${name}}`, value);
+            return text;
+          },
           connection: { subscribeMessage: () => Promise.resolve(() => {}) },
           callWS: async (msg) => mock[msg.type],
         };
@@ -178,7 +186,7 @@ async function openCard(s) {
         el._update();
       }
     },
-    { type: s.type, config: s.config, states, entities: s.accountOnly ? accountOnly : entities, devices, open: s.open, zoom: s.zoom, panel: s.panel, mock: panelMock, expand: s.expand, select: s.select, sidebar: s.sidebar }
+    { type: s.type, config: s.config, states, entities: s.accountOnly ? accountOnly : entities, devices, open: s.open, zoom: s.zoom, panel: s.panel, mock: panelMock, expand: s.expand, select: s.select, sidebar: s.sidebar, panelStrings }
   );
   await page.waitForTimeout(800);
   return page;

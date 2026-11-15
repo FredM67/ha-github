@@ -1,6 +1,6 @@
 // The sidebar panel: translations, the rows of the Repositories tab and the commands it sends.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 
@@ -25,20 +25,40 @@ const load = () => {
     CustomEvent: class {},
   };
   vm.createContext(context);
-  return vm.runInContext(`${src}\n;({ GITHUB_PANEL_KEYS, GITHUB_PANEL_TRANSLATIONS, GITHUB_PANEL_STRINGS, GitHubPanel })`, context);
+  return vm.runInContext(`${src}\n;({ GitHubPanel })`, context);
+};
+
+// The panel's strings, from the integration's translation files (selector.panel.options)
+const TRANSLATIONS = new URL("../custom_components/github_card/translations/", import.meta.url);
+const PANEL = Object.fromEntries(
+  readdirSync(TRANSLATIONS)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => [f.slice(0, -5), JSON.parse(readFileSync(new URL(f, TRANSLATIONS), "utf8")).selector.panel.options]),
+);
+const PREFIX = "component.github_card.selector.panel.options.";
+// Home Assistant's localize, as far as the panel uses it: the string of the language (full code, then base), else
+// English, the placeholders filled; "" for a key it doesn't know
+const localizeFor = (language) => (key, vars = {}) => {
+  if (!key.startsWith(PREFIX)) return "";
+  const k = key.slice(PREFIX.length);
+  const l = PANEL[language] ? language : PANEL[language.split("-")[0]] ? language.split("-")[0] : "en";
+  let text = PANEL[l][k] ?? PANEL.en[k] ?? "";
+  for (const [name, value] of Object.entries(vars)) text = text.replace(`{${name}}`, value);
+  return text;
 };
 
 const lib = load();
 const LANGS = ["en", "fr", "de", "es", "sr", "sr-Latn", "it", "nl", "pt", "pl", "ro", "da", "sv", "bg", "ru", "uk", "hu", "sk", "cs", "sl", "lv", "el"];
 const placeholders = (s) => (String(s).match(/\{\w+\}/g) || []).sort();
 
-test("every language has one string per key, with the English placeholders", () => {
-  assert.deepEqual([...Object.keys(lib.GITHUB_PANEL_TRANSLATIONS)].sort(), [...LANGS].sort());
+test("every translation file has the panel's English keys, non-empty, with the English placeholders", () => {
+  assert.deepEqual(Object.keys(PANEL).sort(), [...LANGS].sort());
+  const keys = Object.keys(PANEL.en).sort();
   for (const l of LANGS) {
-    assert.equal(lib.GITHUB_PANEL_TRANSLATIONS[l].length, lib.GITHUB_PANEL_KEYS.length, l);
-    for (const k of lib.GITHUB_PANEL_KEYS) {
-      assert.ok(String(lib.GITHUB_PANEL_STRINGS[l][k]).trim(), `${l}.${k}`);
-      assert.deepEqual(placeholders(lib.GITHUB_PANEL_STRINGS[l][k]), placeholders(lib.GITHUB_PANEL_STRINGS.en[k]), `${l}.${k}`);
+    assert.deepEqual(Object.keys(PANEL[l]).sort(), keys, l);
+    for (const k of keys) {
+      assert.ok(String(PANEL[l][k]).trim(), `${l}.${k}`);
+      assert.deepEqual(placeholders(PANEL[l][k]), placeholders(PANEL.en[k]), `${l}.${k}`);
     }
   }
 });
@@ -47,6 +67,7 @@ const panel = (calls = []) => {
   const p = new lib.GitHubPanel();
   p._hass = {
     language: "fr",
+    localize: localizeFor("fr"),
     callWS: async (msg) => {
       calls.push(msg);
       if (msg.type === "github_card/follow") return { ok: true, added: msg.add, removed: msg.remove, skipped: [] };
@@ -113,13 +134,32 @@ test("stop following asks first, then sends the removal", async () => {
   assert.deepEqual([...calls[0].remove], ["juju35/ha-parcel"]);
 });
 
-test("the language falls back to the base, then English", () => {
+test("the strings come from the integration's translations, loaded before the panel is drawn", async () => {
   const p = new lib.GitHubPanel();
-  p._hass = { language: "sr-Latn" };
-  assert.equal(p._lang(), "sr-Latn");
-  p._hass = { language: "de-CH" };
+  const loads = [];
+  let renders = 0;
+  p._render = () => renders++;
+  p._hass = {
+    language: "de",
+    loadBackendTranslation: async (category, domain) => {
+      loads.push([category, domain]);
+      return localizeFor("de");
+    },
+  };
+  assert.equal(p._t("follow"), "follow"); // not loaded yet: the key
+  await p._loadStrings();
+  assert.deepEqual(loads, [["selector", "github_card"]]);
+  assert.equal(renders, 1);
+  assert.equal(p._lang(), "de");
   assert.equal(p._t("follow"), "Verfolgen");
-  p._hass = { language: "ja" };
+  assert.equal(p._t("summary", { followed: 1, offered: 2 }), PANEL.de.summary.replace("{followed}", 1).replace("{offered}", 2));
+  // Home Assistant's newest localize first, then the one of the load
+  p._hass.localize = localizeFor("en");
+  assert.equal(p._t("follow"), "Follow");
+  // A failed load: Home Assistant's localize; English for a language without a file
+  p._hass = { language: "ja", localize: localizeFor("ja"), loadBackendTranslation: async () => { throw new Error("x"); } };
+  await p._loadStrings();
+  assert.equal(renders, 2);
   assert.equal(p._t("summary", { followed: 1, offered: 2 }), "Followed: 1 · Not followed: 2");
 });
 
@@ -201,6 +241,7 @@ test("a failed load is tried again after 2 s, 5 s, 15 s then every 30 s, its err
   let fail = true;
   panel._hass = {
     language: "en",
+    localize: localizeFor("en"),
     callWS: async (msg) => {
       if (fail) throw new Error("Unknown command.");
       return msg.type === "github_card/settings" ? { settings: { filter: "x" } } : { configured: true, followed: [], offered: [] };
@@ -234,7 +275,7 @@ test("Retry loads again at once", async () => {
   panel._reload = async () => { reloads++; };
   await panel._repoAction("retry");
   assert.equal(reloads, 1);
-  assert.equal(lib.GITHUB_PANEL_STRINGS.fr.retry, "Réessayer");
+  assert.equal(PANEL.fr.retry, "Réessayer");
 });
 
 test("My pull requests: any repository (none followed), its own filter, the badge counts them all", () => {

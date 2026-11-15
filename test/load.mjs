@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const NAMES = ["discover", "keyOf", "fmtCount", "safeUrl", "lang", "STRINGS", "TRANSLATIONS", "KEYS", "LANGUAGES", "GitHubCard", "GitHubMiniCard", "GitHubCardEditor", "GitHubMiniCardEditor", "document", "window"];
+const NAMES = ["discover", "keyOf", "fmtCount", "safeUrl", "lang", "STRINGS", "LANGUAGES", "GitHubCard", "GitHubMiniCard", "GitHubCardEditor", "GitHubMiniCardEditor", "document", "window"];
 
 export const load = () => {
   const src = readFileSync(new URL("../custom_components/github_card/frontend/github-card.js", import.meta.url), "utf8");

@@ -22,9 +22,10 @@ custom_components/github_card/
 ├── archived.py    # Which offered repositories are archived (GraphQL, 50 per query, cached 10 minutes), for the
 │                    # ignore_archived setting
 ├── notify.py        # Persistent notification when a github latest_issue / latest_pull_request number grows
-├── translations/    # Config flow strings, 22 languages
+├── translations/    # Config flow strings and the panel's (selector.panel.options), 22 languages
 ├── brand/           # Integration icon
-└── frontend/        # github-card.js (cards), github-panel.js (panel, 5 tabs, 22 languages)
+└── frontend/        # github-card.js (cards, its STRINGS table in 22 languages), github-panel.js (panel, 5 tabs,
+                     # its strings from translations/ via hass.loadBackendTranslation)
 ```
 
 ## Rules

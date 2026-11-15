@@ -2,18 +2,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { load } from "./load.mjs";
 
-const { TRANSLATIONS, KEYS, STRINGS, LANGUAGES, lang } = load();
+const { STRINGS, LANGUAGES, lang } = load();
+const KEYS = Object.keys(STRINGS.en);
 const placeholders = (s) => (String(s).match(/\{\w+\}/g) || []).sort();
 const LANGS = ["en", "fr", "de", "es", "sr", "sr-Latn", "it", "nl", "pt", "pl", "ro", "da", "sv", "bg", "ru", "uk", "hu", "sk", "cs", "sl", "lv", "el"];
 
 test("every language of the convention is there, and offered in the editors", () => {
-  assert.deepEqual([...Object.keys(TRANSLATIONS)].sort(), [...LANGS].sort());
+  assert.deepEqual([...Object.keys(STRINGS)].sort(), [...LANGS].sort());
   assert.deepEqual([...LANGUAGES.map(([l]) => l)].sort(), [...LANGS].sort());
 });
 
-test("every language has one non-empty string per key, with the English placeholders", () => {
+test("every language has the English keys, each a non-empty string with the English placeholders", () => {
   for (const l of LANGS) {
-    assert.equal(TRANSLATIONS[l].length, KEYS.length, `number of strings of ${l}`);
+    assert.deepEqual(Object.keys(STRINGS[l]).sort(), [...KEYS].sort(), `keys of ${l}`);
     for (const k of KEYS) {
       assert.ok(String(STRINGS[l][k]).trim(), `empty ${l}.${k}`);
       assert.deepEqual(placeholders(STRINGS[l][k]), placeholders(STRINGS.en[k]), `placeholders of ${l}.${k}`);
